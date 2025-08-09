@@ -5,8 +5,8 @@ import 'package:flutter/services.dart';
 import 'companiondevicepairing_platform_interface.dart';
 
 /// An implementation of [CompaniondevicepairingPlatform] that uses method channels.
-class MethodChannelCompaniondevicepairing
-    extends CompaniondevicepairingPlatform {
+class MethodChannelCompanionDevicePairing
+    extends CompanionDevicePairingPlatform {
   /// The method channel used to interact with the native platform.
   @visibleForTesting
   final methodChannel = const MethodChannel("companiondevicepairing");

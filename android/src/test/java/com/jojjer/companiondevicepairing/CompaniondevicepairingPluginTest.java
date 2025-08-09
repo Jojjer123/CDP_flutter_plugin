@@ -15,10 +15,10 @@ import org.junit.Test;
  * you can run them directly from IDEs that support JUnit such as Android Studio.
  */
 
-public class CompaniondevicepairingPluginTest {
+public class CompanionDevicePairingTest {
   @Test
   public void onMethodCall_getPlatformVersion_returnsExpectedValue() {
-    CompaniondevicepairingPlugin plugin = new CompaniondevicepairingPlugin();
+    CompanionDevicePairing plugin = new CompanionDevicePairing();
 
     final MethodCall call = new MethodCall("getPlatformVersion", null);
     MethodChannel.Result mockResult = mock(MethodChannel.Result.class);

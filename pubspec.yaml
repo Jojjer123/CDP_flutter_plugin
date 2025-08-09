@@ -23,5 +23,5 @@ flutter:
     platforms:
       android:
         package: com.jojjer.companiondevicepairing
-        pluginClass: CompaniondevicepairingPlugin
+        pluginClass: CompanionDevicePairing
 

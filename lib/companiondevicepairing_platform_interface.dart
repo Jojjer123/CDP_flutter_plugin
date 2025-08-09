@@ -7,24 +7,24 @@ import 'companiondevicepairing_method_channel.dart';
 typedef ReadCallback = void Function(String serviceUuid, String characteristicUuid, int value);
 typedef FwUpdateCallback = void Function(double progress);
 
-abstract class CompaniondevicepairingPlatform extends PlatformInterface {
+abstract class CompanionDevicePairingPlatform extends PlatformInterface {
   /// Constructs a CompaniondevicepairingPlatform.
-  CompaniondevicepairingPlatform() : super(token: _token);
+  CompanionDevicePairingPlatform() : super(token: _token);
 
   static final Object _token = Object();
 
-  static CompaniondevicepairingPlatform _instance =
-      MethodChannelCompaniondevicepairing();
+  static CompanionDevicePairingPlatform _instance =
+      MethodChannelCompanionDevicePairing();
 
   /// The default instance of [CompaniondevicepairingPlatform] to use.
   ///
   /// Defaults to [MethodChannelCompaniondevicepairing].
-  static CompaniondevicepairingPlatform get instance => _instance;
+  static CompanionDevicePairingPlatform get instance => _instance;
 
   /// Platform-specific implementations should set this with their own
   /// platform-specific class that extends [CompaniondevicepairingPlatform] when
   /// they register themselves.
-  static set instance(CompaniondevicepairingPlatform instance) {
+  static set instance(CompanionDevicePairingPlatform instance) {
     PlatformInterface.verifyToken(instance, _token);
     _instance = instance;
   }

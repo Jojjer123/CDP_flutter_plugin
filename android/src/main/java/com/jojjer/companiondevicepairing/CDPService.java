@@ -50,7 +50,7 @@ public class CDPService extends CompanionDeviceService {
     @Override
     public void onCreate() {
         super.onCreate();
-        Log.d(CompaniondevicepairingPlugin.CDP_TAG, "CDPService created");
+        Log.d(CompanionDevicePairing.CDP_TAG, "CDPService created");
         bleManager = BleManager.getInstance();
         bleManager.initialize(getApplicationContext());
     }
@@ -58,15 +58,15 @@ public class CDPService extends CompanionDeviceService {
     @Override
     public void onDeviceAppeared(AssociationInfo associationInfo) {
         AssociatedDevice device = associationInfo.getAssociatedDevice();
-        Log.d(CompaniondevicepairingPlugin.CDP_TAG, "Device appeared: " + device);
+        Log.d(CompanionDevicePairing.CDP_TAG, "Device appeared: " + device);
         boolean ok = bleManager.connectToDevice(device.getBluetoothDevice());
         if (!ok) {
-            Log.e(CompaniondevicepairingPlugin.CDP_TAG, "Failed connecting to device");
+            Log.e(CompanionDevicePairing.CDP_TAG, "Failed connecting to device");
         }
     }
 
     @Override
     public void onDeviceDisappeared(AssociationInfo associationInfo) {
-        Log.d(CompaniondevicepairingPlugin.CDP_TAG, "The device that disappeared: " + associationInfo);
+        Log.d(CompanionDevicePairing.CDP_TAG, "The device that disappeared: " + associationInfo);
     }
 }

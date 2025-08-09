@@ -58,8 +58,8 @@ import android.provider.Settings;
 import androidx.core.content.ContextCompat;
 import androidx.core.app.ActivityCompat;
 
-/** CompaniondevicepairingPlugin */
-public class CompaniondevicepairingPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware, BleManager.BleCallback {
+/** CompanionDevicePairing */
+public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler, ActivityAware, BleManager.BleCallback {
   public static final String CDP_TAG = "CDP";
 
   /* USE THIS FOR SMARTWATCH */
