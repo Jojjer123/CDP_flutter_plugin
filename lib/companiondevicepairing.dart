@@ -1,11 +1,10 @@
 import 'dart:developer';
 
-
 import 'companiondevicepairing_platform_interface.dart';
 
 class CompanionDevicePairing {
-  Future<void> registerCallbacks(ReadCallback readCb, FwUpdateCallback fwUpdateCb) async {
-    CompanionDevicePairingPlatform.instance.registerCallbacks(readCb, fwUpdateCb);
+  Future<void> registerCallbacks(ReadCallback readCb, FwUpdateCallback fwUpdateCb, ReadAllServicesCallback readAllServicesCb, CharacteristicChangedCallback characteristicChangedCb) async {
+    CompanionDevicePairingPlatform.instance.registerCallbacks(readCb, fwUpdateCb, readAllServicesCb, characteristicChangedCb);
     log("Registered callbacks!");
   }
 
@@ -30,6 +29,10 @@ class CompanionDevicePairing {
     return status;
   }
 
+  Future<void> getAllServices() async {
+    return CompanionDevicePairingPlatform.instance.getAllServices();
+  }
+
   Future<void> updateFirmware(String serviceUuid, String characteristicUuid, String firmwareFilePath) async {
     CompanionDevicePairingPlatform.instance.updateFirmware(serviceUuid, characteristicUuid, firmwareFilePath);
     log("Updating firmware!");
@@ -49,5 +52,10 @@ class CompanionDevicePairing {
 
   Future<String> readAllCharacteristics() async {
     return CompanionDevicePairingPlatform.instance.readAllCharacteristics();
+  }
+
+  Future<void> subscribeToCharacteristic(String serviceUuid, String characteristicUuid) async {
+    await CompanionDevicePairingPlatform.instance.subscribeToCharacteristic(serviceUuid, characteristicUuid);
+    log("Subscribing to characteristic");
   }
 }

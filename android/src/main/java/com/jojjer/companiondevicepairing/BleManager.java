@@ -6,9 +6,11 @@ import java.io.FileInputStream;
 import java.io.ByteArrayOutputStream;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.Queue;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.LinkedList;
 
@@ -22,6 +24,7 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothProfile;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattCharacteristic;
 
 class WriteRequest {
@@ -48,7 +51,7 @@ public final class BleManager {
     private boolean isConnected = false;
     private String sensorData;
 
-    private List foundServiceUUIDs = new ArrayList<String>();
+    private List<String> foundServiceUUIDs = new ArrayList<String>();
 
     Queue<WriteRequest> writeQueue = new LinkedList<>();
     boolean isWriting = false;
@@ -71,6 +74,8 @@ public final class BleManager {
     public interface BleCallback {
         void firmwareProgressCallback(double progress);
         void readCharacteristicCallback(String serviceUuid, String characteristicUuid, int value);
+        void readAllServicesCallback(Map<String, Object> serviceMap);
+        void characteristicChangedCallback(String serviceUuid, String characteristicUuid, byte[] value);
     }
 
     private BleCallback bleCallback;
@@ -82,6 +87,7 @@ public final class BleManager {
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            Log.d(logTag, "Connection state change, new state: " + newState);
             isConnected = (newState == BluetoothProfile.STATE_CONNECTED);
             if (isConnected) {
                 Log.d(logTag, "Connected to GATT server.");
@@ -93,15 +99,16 @@ public final class BleManager {
 
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            Log.d(logTag, "Services discovered: " + gatt.toString());
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 List<BluetoothGattService> services = gatt.getServices();
                 for (BluetoothGattService s : services) {
                     if (!foundServiceUUIDs.contains(s)) {
-                        foundServiceUUIDs.add(s.getUuid().toString());
-                        if (s.getUuid().toString().equals("12345000-14e1-41b1-b3b6-6bb8b548ee82")) {
-                            for (BluetoothGattCharacteristic c : s.getCharacteristics()) {
-                                Log.d(logTag, "Characteristic discovered: " + c.getUuid().toString());
-                            }
+                        String uuidToAdd = UuidUtils.normalizeUuid(s.getUuid().toString());
+                        foundServiceUUIDs.add(uuidToAdd);
+                        Log.d(logTag, "Found service: " + s.getUuid().toString());
+                        for (BluetoothGattCharacteristic c : s.getCharacteristics()) {
+                            Log.d(logTag, "Characteristic discovered: " + c.getUuid().toString());
                         }
                     }
                 }
@@ -112,7 +119,8 @@ public final class BleManager {
         public void onCharacteristicChanged(BluetoothGatt gatt,
                                             BluetoothGattCharacteristic characteristic,
                                             byte[] value) {
-            Log.d(logTag, "Sensor data received: " + value[0]);
+            Log.d(logTag, "Sensor data received");
+            bleCallback.characteristicChangedCallback(characteristic.getService().getUuid().toString(), characteristic.getUuid().toString(), value);
         }
 
         @Override
@@ -120,12 +128,18 @@ public final class BleManager {
                                          BluetoothGattCharacteristic characteristic,
                                          byte[] value,
                                          int status) {
+            Log.d(logTag, "Characteristic read: " + characteristic.getUuid()/*characteristic.toString()*/);
+            Log.d(logTag, Arrays.toString(value));
             synchronized (readLock) {
                 readCompleted = true;
                 isReading = false;
                 readLock.notify();
             }
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                if (value.length == 0) {
+                    Log.d(logTag, "Read characteristic with no value");
+                    return;
+                }
                 int data = bytesToInt(value);
                 Log.d(logTag, "Data: " + data);
                 if (bleCallback != null) {
@@ -157,10 +171,10 @@ public final class BleManager {
     };
 
     public static int bytesToInt(byte[] bytes) {
-        return ((bytes[0] & 0xFF) << 24) |
-               ((bytes[1] & 0xFF) << 16) |
-               ((bytes[2] & 0xFF) << 8)  |
-               ((bytes[3] & 0xFF));
+        return ((bytes[3] & 0xFF) << 24) |
+               ((bytes[2] & 0xFF) << 16) |
+               ((bytes[1] & 0xFF) << 8)  |
+               ((bytes[0] & 0xFF));
     }
 
     public void initialize(Context ctx) {
@@ -181,6 +195,7 @@ public final class BleManager {
             Log.d(logTag, "Bluetooth is off");
             return false;
         }
+        Log.d(logTag, "Connecting to device: " + device.toString());
         gatt = device.connectGatt(ctx, false, gattCallback);
         if (gatt != null) {
             return true;
@@ -194,6 +209,45 @@ public final class BleManager {
             return 0;
         }
         return isConnected ? 1 : 0;
+    }
+
+    public String getDeviceId() {
+        BluetoothDevice bluetoothDevice = gatt.getDevice();
+        if (bluetoothDevice != null) {
+            return bluetoothDevice.getAddress();
+        }
+        return "";
+    }
+
+    public void getAllServices() {
+        List<BleServiceInfo> serviceList = new ArrayList<>();
+
+        for (String serviceUuid : foundServiceUUIDs) {
+            BleServiceInfo serviceInfo = new BleServiceInfo(serviceUuid);
+
+            BluetoothGattService gattService = gatt.getService(UUID.fromString(serviceUuid));
+            if (gattService != null) {
+                List<BluetoothGattCharacteristic> characteristics = gattService.getCharacteristics();
+                for (BluetoothGattCharacteristic c : characteristics) {
+                    serviceInfo.addCharacteristic(c.getUuid().toString());
+                }
+            } else {
+                Log.d(logTag, "Service not found: " + serviceUuid);
+            }
+
+            serviceList.add(serviceInfo);
+        }
+
+        Map<String, Object> deviceData = new HashMap<>();
+        deviceData.put("deviceId", getDeviceId());
+
+        List<Map<String, Object>> servicesAsMaps = new ArrayList<>();
+        for (BleServiceInfo service : serviceList) {
+            servicesAsMaps.add(service.toMap());
+        }
+        deviceData.put("services", servicesAsMaps);
+
+        bleCallback.readAllServicesCallback(deviceData);
     }
 
     public BluetoothGattCharacteristic getCharacteristic(String serviceUuid, String characteristicUuid) {
@@ -216,29 +270,35 @@ public final class BleManager {
     }
 
     public void subscribeToNotification(String serviceUuid, String characteristicUuid) {
-        if (foundServiceUUIDs.contains(serviceUuid)) {
-            if (gatt == null) {
-                Log.d(logTag, "Gatt is null, cannot subscribe to notifications");
-                return;
-            }
-            BluetoothGattService service = gatt.getService(UUID.fromString(serviceUuid));
-            if (service != null) {
-                BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(characteristicUuid));
-                if (characteristic == null) {
-                    Log.d(logTag, "Characteristic not found: " + characteristicUuid);
+            serviceUuid = UuidUtils.normalizeUuid(serviceUuid);
+            if (foundServiceUUIDs.contains(serviceUuid)) {
+                if (gatt == null) {
+                    Log.d(logTag, "Gatt is null, cannot subscribe to notifications");
                     return;
                 }
-                gatt.setCharacteristicNotification(characteristic, true);
+                BluetoothGattService service = gatt.getService(UUID.fromString(serviceUuid));
+                if (service != null) {
+                    BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(characteristicUuid));
+                    if (characteristic == null) {
+                        Log.d(logTag, "Characteristic not found: " + characteristicUuid);
+                        return;
+                    }
+                    BluetoothGattDescriptor descriptor = characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"));
+                    descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                    gatt.writeDescriptor(descriptor);
+                    gatt.setCharacteristicNotification(characteristic, true);
+                } else {
+                    Log.d(logTag, "Service not found: " + serviceUuid);
+                }
             } else {
-                Log.d(logTag, "Service not found: " + serviceUuid);
-            }
-        } else {
-            Log.d(logTag, "UUID not found in discovered services: " + serviceUuid);
+                Log.d(logTag, "UUID not found in discovered services: " + serviceUuid);
         }
     }
 
     private void processNextWrite() {
+        Log.d(logTag, "Processing write");
         if (writeQueue.isEmpty()) {
+            Log.d(logTag, "Write queue is empty");
             isWriting = false;
             return;
         }
@@ -251,6 +311,9 @@ public final class BleManager {
             Log.e(logTag, "Failed to write to characteristic: " + request.characteristic.getUuid());
             isWriting = false;
             processNextWrite();
+        }
+        else {
+            Log.d(logTag, "Successfully wrote to characteristic: " + request.characteristic.getUuid());
         }
     }
 
@@ -369,17 +432,20 @@ public final class BleManager {
             return false;
         }
         if (foundServiceUUIDs.contains(serviceUuid)) {
+            Log.d(logTag, "Service UUID has been found for which the command should be sent");
             if (gatt == null) {
                 Log.d(logTag, "Gatt is null, cannot send command");
                 return false;
             }
             BluetoothGattService service = gatt.getService(UUID.fromString(serviceUuid));
             if (service != null) {
+                Log.d(logTag, "Service found");
                 BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(characteristicUuid));
                 if (characteristic == null) {
                     Log.d(logTag, "Characteristic not found: " + characteristicUuid);
                     return false;
                 }
+                Log.d(logTag, "Characteristic found");
                 writeQueue.add(new WriteRequest(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT));
                 if (!isWriting) {
                     processNextWrite();

@@ -27,7 +27,7 @@ import android.companion.AssociationInfo;
 import android.companion.AssociatedDevice;
 import android.companion.CompanionDeviceService;
 
-// import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanResult;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothProfile;
@@ -57,11 +57,25 @@ public class CDPService extends CompanionDeviceService {
 
     @Override
     public void onDeviceAppeared(AssociationInfo associationInfo) {
+        Log.d(CompanionDevicePairing.CDP_TAG, "Device appeared: " + associationInfo);
         AssociatedDevice device = associationInfo.getAssociatedDevice();
-        Log.d(CompanionDevicePairing.CDP_TAG, "Device appeared: " + device);
-        boolean ok = bleManager.connectToDevice(device.getBluetoothDevice());
-        if (!ok) {
-            Log.e(CompanionDevicePairing.CDP_TAG, "Failed connecting to device");
+        if (device != null) {
+            Log.d(CompanionDevicePairing.CDP_TAG, "Device appeared: " + device);
+
+            ScanResult device_to_pair = device.getBleDevice();
+            BluetoothDevice bl_device = device.getBluetoothDevice();
+            if (device_to_pair != null) {
+              bleManager.connectToDevice(device_to_pair.getDevice());
+            }
+            else if (bl_device != null) {
+              bleManager.connectToDevice(bl_device);
+            }
+            else {
+              Log.d(CompanionDevicePairing.CDP_TAG, "No BLE device available: " + device);
+            }
+        }
+        else {
+            Log.d(CompanionDevicePairing.CDP_TAG, "No assoicated device found");
         }
     }
 

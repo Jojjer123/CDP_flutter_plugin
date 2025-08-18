@@ -127,6 +127,36 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
   }
 
   @Override
+  public void readAllServicesCallback(Map<String, Object> servicesMap) {
+    if (channel != null) {
+      //Log.d(CDP_TAG, "Read all services callback: " + servicesMap);
+      new Handler(Looper.getMainLooper()).post(() -> {
+        channel.invokeMethod("readAllServicesCallback", servicesMap);
+      });
+    }
+    else {
+      Log.d(CDP_TAG, "Can't invoke read all services callback as the MethodChannel is null");
+    }
+  }
+
+  @Override
+  public void characteristicChangedCallback(String serviceUuid, String characteristicUuid, byte[] value) {
+    if (channel != null) {
+      // Log.d(CDP_TAG, "Characteristic changed callback: " + serviceUuid + ", " + characteristicUuid + ", " + value);
+      new Handler(Looper.getMainLooper()).post(() -> {
+        Map<String, Object> map = new HashMap<>();
+        map.put("serviceUuid", serviceUuid);
+        map.put("characteristicUuid", characteristicUuid);
+        map.put("value", value);
+        channel.invokeMethod("characteristicChangedCallback", map);
+      });
+    }
+    else {
+      Log.d(CDP_TAG, "Can't invoke characteristic changed callback as the MethodChannel is null");
+    }
+  }
+
+  @Override
   public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
     context = flutterPluginBinding.getApplicationContext();
     channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "companiondevicepairing");
@@ -153,6 +183,9 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     } else if (call.method.equals("getConnectionStatus")) {
       int status = checkConnectionStatus();
       result.success(status);
+    } else if (call.method.equals("getAllServices")) {
+      new Thread(() -> getAllServices()).start();
+      result.success(null);
     } else if (call.method.equals("updateFirmware")) {
       String params = call.arguments.toString();
       String[] data = params.split(",");
@@ -175,6 +208,7 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
       boolean ok = readCharacteristic(uuids[0], uuids[1]);
       result.success(ok);
     } else if (call.method.equals("writeCharacteristic")) {
+      Log.d(CDP_TAG, "Writing to characteristic");
       String params = call.arguments.toString();
       String[] data = params.split(",");
       if (data.length != 3) {
@@ -183,7 +217,26 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
         result.success(false);
         return;
       }
-      byte[] value = toBytes(Integer.parseInt(data[2]));
+      // TODO: Pass lenght of data to write, instead of using fixed 8 bytes
+      //byte[] value = toBytes(Integer.parseInt(data[2]));
+
+      Log.d(CDP_TAG, "Time value as string: " + data[2]);
+      
+      long dataVal = Long.parseLong(data[2]);
+      byte[] value = new byte[9];
+      value[0] = 2;
+      for (int i = 8; i >= 1; --i) {
+        value[i] = (byte) (dataVal & 0xFF);
+        dataVal >>= 8;
+      }
+
+      StringBuilder sb = new StringBuilder();
+      for (byte b : value) {
+        sb.append(b & 0xFF)
+          .append(", ");
+      }
+      Log.d(CDP_TAG, "Converted value to: " + sb.toString().trim());
+
       boolean ok = writeCharacteristic(data[0], data[1], value);
       result.success(ok);
     } else if (call.method.equals("readCharacteristicValue")) {
@@ -191,6 +244,17 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
 
     } else if (call.method.equals("readAllCharacteristics")) {
       
+      result.success(null);
+    } else if (call.method.equals("subscribeToCharacteristic")) {
+      String params = call.arguments.toString();
+      String[] data = params.split(",");
+      if (data.length != 2) {
+        Log.d(CDP_TAG, "Invalid arguments: " + params);
+        result.error("INVALID_ARGUMENTS", "Expected 2 parameters", null);
+        result.success(false);
+        return;
+      }
+      subscribeToCharacteristic(data[0], data[1]);
       result.success(null);
     } else {
       result.notImplemented();
@@ -241,24 +305,42 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     result[3] = (byte) i;
 
     return result;
-  }
+}
 
   public void setUp(String deviceName) {
+    Log.d(CDP_TAG, "#######################################");
     checkPermission(Manifest.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND, REQUEST_CODE_FOR_RUN_IN_BACKGROUND);
     checkPermission(Manifest.permission.REQUEST_COMPANION_USE_DATA_IN_BACKGROUND, REQUEST_CODE_FOR_USE_DATA_IN_BACKGROUND);
 
     CompanionDeviceManager deviceManager = (CompanionDeviceManager) context.getSystemService(Context.COMPANION_DEVICE_SERVICE);
     if (deviceManager != null) {
+      Optional<AssociationInfo> association = Optional.empty();
       // Check if device is already associated and only connect if that is the case
-      List<AssociationInfo> associations = deviceManager.getMyAssociations();
-      Optional<AssociationInfo> ble_device = associations.stream()
-              .filter(device -> device.getDisplayName().equals(deviceName))
-              .findFirst();
+      List<AssociationInfo> a = deviceManager.getMyAssociations();
+      for (AssociationInfo associationInfo : a) {
+        Log.d(CDP_TAG, "Associated device: " + associationInfo.getDisplayName());
+        Log.d(CDP_TAG, "Looking for device: " + deviceName);
+        if (associationInfo.getDisplayName().equals(deviceName)) {
+          Log.d(CDP_TAG, "Association found!");
+          association = Optional.of(associationInfo);
+          //Log.d(CDP_TAG, "Device: " + ble_device.toString());
+        }
+      }
 
-      if (ble_device.isPresent()) { // Not working as intended if an asociated device has been unpaired
-        Log.d(CDP_TAG, "About to connect to device: " + ble_device.toString());
-        bleManager.connectToDevice(ble_device.get().getAssociatedDevice().getBluetoothDevice());
-        return;
+      if (association.isPresent()) {
+        //Log.d(CDP_TAG, "About to connect to device: " + ble_device.get().toString());
+        AssociatedDevice associated_device = association.get().getAssociatedDevice();
+        //Log.d(CDP_TAG, "Associated device: " + associated_device.toString());
+        ScanResult ble_device = associated_device.getBleDevice();
+        if (ble_device != null) {
+          bleManager.connectToDevice(ble_device.getDevice());
+          return;
+        }
+        BluetoothDevice bluetooth_device = associated_device.getBluetoothDevice();
+        if (bluetooth_device != null) {
+          bleManager.connectToDevice(bluetooth_device);
+          return;
+        }
       }
     } else {
       Log.d(CDP_TAG, "CompanionDeviceManager is null");
@@ -266,29 +348,33 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      Log.d(CDP_TAG, "Creating an association request");
       BluetoothDeviceFilter deviceFilter = new BluetoothDeviceFilter.Builder()
               .setNamePattern(Pattern.compile(deviceName))
               .build();
       AssociationRequest pairingRequest = new AssociationRequest.Builder()
-              .addDeviceFilter(deviceFilter)
-              .setSingleDevice(true)
+              //.addDeviceFilter(deviceFilter)
+              //.setSingleDevice(true)
               .setDeviceProfile(DEVICE_PROFILE_WATCH)
               .build();
 
       Executor executor = runnable -> runnable.run();
 
+      Log.d(CDP_TAG, "Attempting to associate");
       deviceManager.associate(pairingRequest, executor, new CompanionDeviceManager.Callback() {
         @Override
         public void onDeviceFound(IntentSender chooserLauncher) {
+          Log.d(CDP_TAG, "Device found");
           try {
             activity.startIntentSenderForResult(chooserLauncher, SELECT_DEVICE_REQUEST_CODE, null, 0, 0, 0);
           } catch (IntentSender.SendIntentException e) {
-
+            Log.d(CDP_TAG, "Failed sending intent: " + e);
           }
         }
 
         @Override
         public void onAssociationCreated(AssociationInfo associationInfo) {
+          Log.d(CDP_TAG, "Association created!");
           AssociatedDevice device = associationInfo.getAssociatedDevice();
           if (device == null) {
             Log.d(CDP_TAG, "Associated device is NULL");
@@ -309,6 +395,31 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
               Log.d(CDP_TAG, "No device to pair available: " + device.toString());
             }
           }
+
+          Optional<AssociationInfo> association = Optional.empty();
+          List<AssociationInfo> associations = deviceManager.getMyAssociations();
+          // Check if device is already associated and only connect if that is the case
+          for (AssociationInfo aInfo : associations) {
+            Log.d(CDP_TAG, "Association: " + aInfo);
+            Log.d(CDP_TAG, "Looking for " + deviceName);
+            if (associationInfo.getDisplayName().equals(deviceName)) {
+              association = Optional.of(aInfo);
+            }
+          }
+
+          Log.d(CDP_TAG, "About to start observation of the device presence");
+          if (association.isPresent()) {
+            Log.d(CDP_TAG, "BLE device: " + association.get());
+            deviceManager.startObservingDevicePresence(association.get().getDeviceMacAddress().toString());
+            Log.d(CDP_TAG, "Started observing device presence for " + association.get().getDeviceMacAddress().toString());
+            Intent intent = new Intent(context, CompanionDeviceService.class);
+            intent.setAction(SERVICE_INTERFACE);
+            context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+          }
+          else {
+            Log.d(CDP_TAG, "No association found");
+          }
+          Log.d(CDP_TAG, "#######################################");
         }
 
         @Override
@@ -317,15 +428,30 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
         }
       });
 
+      /*Optional<AssociationInfo> association = Optional.empty();
       List<AssociationInfo> associations = deviceManager.getMyAssociations();
-      Optional<AssociationInfo> ble_device = associations.stream()
-              .filter(device -> device.getDisplayName().equals(deviceName))
-              .findFirst();
+      // Check if device is already associated and only connect if that is the case
+      for (AssociationInfo associationInfo : associations) {
+        Log.d(CDP_TAG, "Association: " + associationInfo);
+        Log.d(CDP_TAG, "Looking for " + deviceName);
+        if (associationInfo.getDisplayName().equals(deviceName)) {
+          association = Optional.of(associationInfo);
+        }
+      }
 
-      deviceManager.startObservingDevicePresence(ble_device.get().getDeviceMacAddress().toString());
-      Intent intent = new Intent(context, CompanionDeviceService.class);
-      intent.setAction(SERVICE_INTERFACE);
-      context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+      Log.d(CDP_TAG, "About to start observation of the device presence");
+      if (association.isPresent()) {
+        Log.d(CDP_TAG, "BLE device: " + association.get());
+        deviceManager.startObservingDevicePresence(association.get().getDeviceMacAddress().toString());
+        Log.d(CDP_TAG, "Started observing device presence for " + association.get().getDeviceMacAddress().toString());
+        Intent intent = new Intent(context, CompanionDeviceService.class);
+        intent.setAction(SERVICE_INTERFACE);
+        context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+      }
+      else {
+        Log.d(CDP_TAG, "No association found");
+      }
+      Log.d(CDP_TAG, "#######################################");*/
     }
   }
 
@@ -341,17 +467,35 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
       return false;
     }
 
+    Optional<AssociationInfo> association = Optional.empty();
+
     List<AssociationInfo> associations = deviceManager.getMyAssociations();
-    Optional<AssociationInfo> ble_device = associations.stream()
-            .filter(device -> device.getDisplayName().equals(deviceName))
-            .findFirst();
-    
-    if (ble_device.isPresent()) {
-      Log.d(CDP_TAG, "About to connect to device: " + ble_device.toString());
-      return bleManager.connectToDevice(ble_device.get().getAssociatedDevice().getBluetoothDevice());
+    for (AssociationInfo associationInfo : associations) {
+      Log.d(CDP_TAG, "Associated device: " + associationInfo.getDisplayName());
+      Log.d(CDP_TAG, "Looking for device: " + deviceName);
+      if (associationInfo.getDisplayName().equals(deviceName)) {
+        Log.d(CDP_TAG, "Association found!");
+        association = Optional.of(associationInfo);
+        //Log.d(CDP_TAG, "Device: " + ble_device.toString());
+      }
+    }
+
+    if (association.isPresent()) {
+      //Log.d(CDP_TAG, "About to connect to device: " + ble_device.get().toString());
+      AssociatedDevice associated_device = association.get().getAssociatedDevice();
+      ScanResult ble_device = associated_device.getBleDevice();
+      if (ble_device != null) {
+        bleManager.connectToDevice(ble_device.getDevice());
+        return true;
+      }
+      BluetoothDevice bluetooth_device = associated_device.getBluetoothDevice();
+      if (bluetooth_device != null) {
+        bleManager.connectToDevice(bluetooth_device);
+        return true;
+      }
     }
     
-    Log.d(CDP_TAG, "No device found");
+    Log.d(CDP_TAG, "No device found!");
     return false;
   }
 
@@ -362,6 +506,16 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     else {
       Log.d(CDP_TAG, "BleManager is null");
       return 2;
+    }
+  }
+
+  public void getAllServices() {
+    if (bleManager != null) {
+      Log.d(CDP_TAG, "Getting all services!");
+      bleManager.getAllServices();
+    }
+    else {
+      Log.d(CDP_TAG, "BleManager is null");
     }
   }
 
@@ -376,8 +530,7 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     }
   }
 
-  public boolean readCharacteristic(String serviceUuid, String characteristicUuid)
-  {
+  public boolean readCharacteristic(String serviceUuid, String characteristicUuid) {
     if (bleManager != null) {
       return bleManager.readCharacteristic(serviceUuid, characteristicUuid);
     }
@@ -387,10 +540,20 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     }
   }
 
-  public boolean writeCharacteristic(String serviceUuid, String characteristicUuid, byte[] value)
-  {
+  public boolean writeCharacteristic(String serviceUuid, String characteristicUuid, byte[] value) {
     if (bleManager != null) {
       return bleManager.sendCommand(value, serviceUuid, characteristicUuid);
+    }
+    else {
+      Log.d(CDP_TAG, "BleManager is null");
+      return false;
+    }
+  }
+
+  public boolean subscribeToCharacteristic(String serviceUuid, String characteristicUuid) {
+    if (bleManager != null) {
+      bleManager.subscribeToNotification(serviceUuid, characteristicUuid);
+      return true;
     }
     else {
       Log.d(CDP_TAG, "BleManager is null");

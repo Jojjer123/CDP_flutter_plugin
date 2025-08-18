@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 
 import 'companiondevicepairing_platform_interface.dart';
 
-/// An implementation of [CompaniondevicepairingPlatform] that uses method channels.
+/// An implementation of [CompanionDevicePairingPlatform] that uses method channels.
 class MethodChannelCompanionDevicePairing
     extends CompanionDevicePairingPlatform {
   /// The method channel used to interact with the native platform.
@@ -12,7 +12,11 @@ class MethodChannelCompanionDevicePairing
   final methodChannel = const MethodChannel("companiondevicepairing");
 
   @override
-  Future<void> registerCallbacks(ReadCallback readCb, FwUpdateCallback fwUpdateCb) async {
+  Future<void> registerCallbacks(
+        ReadCallback readCb,
+        FwUpdateCallback fwUpdateCb,
+        ReadAllServicesCallback readAllServicesCb,
+        CharacteristicChangedCallback characteristicChangedCb) async {
     print("Registering callbacks in plugin");
     methodChannel.setMethodCallHandler((call) async {
       if (call.method == "readCallback") {
@@ -33,6 +37,27 @@ class MethodChannelCompanionDevicePairing
           fwUpdateCb(progress);
         } catch (e, stack) {
           print("Error during fwUpdateCallback handling: $e");
+          print(stack);
+        }
+      } else if (call.method == "readAllServicesCallback") {
+        try {
+          final map = Map<String, Object>.from(call.arguments);
+          readAllServicesCb(map);
+        } catch (e, stack) {
+          print("Error during readAllServicesCallback handling: $e");
+          print(stack);
+        }
+      } else if (call.method == "characteristicChangedCallback") {
+        try {
+          final map = Map<String, Object>.from(call.arguments);
+          print("Data: " + map.toString());
+          characteristicChangedCb(
+            map["serviceUuid"] as String,
+            map["characteristicUuid"] as String,
+            map["value"] as Uint8List,
+          );
+        } catch (e, stack) {
+          print("Error during characteristicChangedCallback handling: $e");
           print(stack);
         }
       } else {
@@ -64,6 +89,11 @@ class MethodChannelCompanionDevicePairing
   }
 
   @override
+  Future<void> getAllServices() async {
+    methodChannel.invokeMethod("getAllServices");
+  }
+
+  @override
   Future<void> updateFirmware(String serviceUuid, String characteristicUuid, String firmwareFilePath) async {
     methodChannel.invokeMethod("updateFirmware", "$serviceUuid,$characteristicUuid,$firmwareFilePath");
   }
@@ -81,5 +111,10 @@ class MethodChannelCompanionDevicePairing
   @override
   Future<String> readAllCharacteristics() async {
     return await methodChannel.invokeMethod("readAllCharacteristics");
+  }
+
+  @override
+  Future<void> subscribeToCharacteristic(String serviceUuid, String characteristicUuid) async {
+    methodChannel.invokeMethod("subscribeToCharacteristic", "$serviceUuid,$characteristicUuid");
   }
 }

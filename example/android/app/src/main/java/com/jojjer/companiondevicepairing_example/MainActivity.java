@@ -34,7 +34,7 @@ public class MainActivity extends FlutterActivity {
     public void setUp() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             BluetoothDeviceFilter deviceFilter = new BluetoothDeviceFilter.Builder()
-                    .setNamePattern(Pattern.compile("Supa-watch"))
+                    .setNamePattern(Pattern.compile("SomeDevice"))
                     .build();
             AssociationRequest pairingRequest = new AssociationRequest.Builder()
                     .addDeviceFilter(deviceFilter)
@@ -48,11 +48,9 @@ public class MainActivity extends FlutterActivity {
             deviceManager.associate(pairingRequest, executor, new CompanionDeviceManager.Callback() {
                 @Override
                 public void onDeviceFound(IntentSender chooserLauncher) {
-//          sendLogToFlutter("Device found!!!");
                     try {
                         activity.startIntentSenderForResult(chooserLauncher, SELECT_DEVICE_REQUEST_CODE, null, 0, 0, 0);
                     } catch (IntentSender.SendIntentException e) {
-//            sendLogToFlutter("MainActivity, Failed to send intent");
                     }
                 }
 
