@@ -58,4 +58,9 @@ class CompanionDevicePairing {
     await CompanionDevicePairingPlatform.instance.subscribeToCharacteristic(serviceUuid, characteristicUuid);
     log("Subscribing to characteristic");
   }
+
+  Future<void> storeDeviceModel(Map<String, dynamic> model) async {
+    await CompanionDevicePairingPlatform.instance.storeDeviceModel(model);
+    log("Storing device model with plugin");
+  }
 }

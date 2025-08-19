@@ -72,7 +72,11 @@ public class CDPService extends CompanionDeviceService {
             }
             else {
               Log.d(CompanionDevicePairing.CDP_TAG, "No BLE device available: " + device);
+              return;
             }
+
+            bleManager.loadDeviceModelFromStorage();
+            //bleManager.subscribeToNotifications();
         }
         else {
             Log.d(CompanionDevicePairing.CDP_TAG, "No assoicated device found");

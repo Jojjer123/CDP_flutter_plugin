@@ -117,4 +117,9 @@ class MethodChannelCompanionDevicePairing
   Future<void> subscribeToCharacteristic(String serviceUuid, String characteristicUuid) async {
     methodChannel.invokeMethod("subscribeToCharacteristic", "$serviceUuid,$characteristicUuid");
   }
+
+  @override
+  Future<void> storeDeviceModel(Map<String, dynamic> jsonModel) async {
+    methodChannel.invokeMethod("storeDeviceModel", jsonModel);
+  }
 }

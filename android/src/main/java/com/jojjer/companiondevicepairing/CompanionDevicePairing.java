@@ -24,6 +24,7 @@ import android.content.pm.PackageManager;
 import android.content.ServiceConnection;
 import android.content.ComponentName;
 import android.content.BroadcastReceiver;
+import android.content.SharedPreferences;
 import android.util.Log;
 import android.util.Base64;
 import android.net.MacAddress;
@@ -57,6 +58,9 @@ import android.provider.Settings;
 
 import androidx.core.content.ContextCompat;
 import androidx.core.app.ActivityCompat;
+
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 /** CompanionDevicePairing */
 public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler, ActivityAware, BleManager.BleCallback {
@@ -256,6 +260,11 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
       }
       subscribeToCharacteristic(data[0], data[1]);
       result.success(null);
+    } else if (call.method.equals("storeDeviceModel")) {
+      Map<String, Object> deviceModel = (Map<String, Object>) call.arguments;
+      Log.d(CDP_TAG, "Received call to store device model: " + deviceModel.toString());
+      storeDeviceModel(deviceModel);
+      result.success(null);
     } else {
       result.notImplemented();
     }
@@ -268,6 +277,7 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
 
   @Override
   public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
+    Log.d(CDP_TAG, "Attached to activity");
     activity = binding.getActivity();
   }
 
@@ -558,6 +568,21 @@ public class CompanionDevicePairing implements FlutterPlugin, MethodCallHandler,
     else {
       Log.d(CDP_TAG, "BleManager is null");
       return false;
+    }
+  }
+
+  public void storeDeviceModel(Map<String, Object> model) {
+    if (activity != null) {
+        SharedPreferences sharedPref = activity.getSharedPreferences("my_prefs", Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = sharedPref.edit();
+        Gson gson = new Gson();
+        editor.putString("model", gson.toJson(model));
+        editor.apply();
+        Log.d(CDP_TAG, "Device model stored in shared preferences now");
+        bleManager.loadDeviceModel(model);
+    }
+    else {
+        Log.d(CDP_TAG, "Never attached to an actitivy, can't get shared preferences");
     }
   }
 }

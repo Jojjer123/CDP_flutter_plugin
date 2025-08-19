@@ -73,4 +73,8 @@ abstract class CompanionDevicePairingPlatform extends PlatformInterface {
   Future<void> subscribeToCharacteristic(String serviceUuid, String characteristicUuid) {
     throw UnimplementedError("subscribeToCharacteristic has not been implemented.");
   }
+
+  Future<void> storeDeviceModel(Map<String, dynamic> model) {
+    throw UnimplementedError("storeDeviceModel has not been implemented.");
+  }
 }

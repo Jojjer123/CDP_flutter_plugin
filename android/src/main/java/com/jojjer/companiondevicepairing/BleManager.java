@@ -2,6 +2,7 @@ package com.jojjer.companiondevicepairing;
 
 import java.io.File;
 import java.io.IOException;
+import java.sql.Time;
 import java.io.FileInputStream;
 import java.io.ByteArrayOutputStream;
 
@@ -17,6 +18,7 @@ import java.util.LinkedList;
 import android.util.Log;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothDevice;
@@ -26,6 +28,9 @@ import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattCharacteristic;
+
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 class WriteRequest {
     BluetoothGattCharacteristic characteristic;
@@ -61,6 +66,10 @@ public final class BleManager {
     private final Object readLock = new Object();
     private volatile boolean writeCompleted = false;
     private volatile boolean readCompleted = false;
+
+    private Map<String, Object> deviceModel;
+
+    Queue<BluetoothGattDescriptor> descriptorWriteQueue = new LinkedList();
 
     private BleManager() {}
 
@@ -113,6 +122,7 @@ public final class BleManager {
                     }
                 }
             }
+            subscribeToNotifications();
         }
 
         @Override
@@ -167,6 +177,16 @@ public final class BleManager {
             }
             isWriting = false;
             processNextWrite();
+        }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt,
+                                      BluetoothGattDescriptor descriptor,
+                                      int status) {
+            descriptorWriteQueue.remove();
+            if (!descriptorWriteQueue.isEmpty()) {
+                gatt.writeDescriptor(descriptor);
+            }
         }
     };
 
@@ -285,7 +305,11 @@ public final class BleManager {
                     }
                     BluetoothGattDescriptor descriptor = characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"));
                     descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                    gatt.writeDescriptor(descriptor);
+                    descriptorWriteQueue.add(descriptor);
+
+                    if (descriptorWriteQueue.size() == 1) {
+                        gatt.writeDescriptor(descriptor);
+                    }
                     gatt.setCharacteristicNotification(characteristic, true);
                 } else {
                     Log.d(logTag, "Service not found: " + serviceUuid);
@@ -501,6 +525,43 @@ public final class BleManager {
         else {
             Log.d(logTag, noConnectionStr);
             return false;
+        }
+    }
+
+    public void loadDeviceModel(Map<String, Object> model) {
+        deviceModel = model;
+    }
+
+    public void loadDeviceModelFromStorage() {
+        SharedPreferences sharedPref = this.ctx.getSharedPreferences("my_prefs", Context.MODE_PRIVATE);
+        String jsonModel = sharedPref.getString("model", "{}");
+        Gson gson = new Gson();
+        Map<String, Object> model = gson.fromJson(jsonModel, new TypeToken<Map<String, Object>>(){}.getType());
+        deviceModel = model;
+        Log.d(logTag, "Device model loaded device model from shared preferences: " + model);
+    }
+
+    public void subscribeToNotifications() {
+        // Log.d(logTag, "Models serviceMap: " + deviceModel.get("serviceMap"));
+        for (Map.Entry<String, Object> serviceEntry : ((Map<String, Object>)deviceModel.get("serviceMap")).entrySet()) {
+            //Log.d(logTag, "found service: " + serviceEntry);
+            //Log.d(logTag, "service contains values: " + serviceEntry.getValue());
+            //Log.d(logTag, "service uuid: " + ((Map<String, Object>)serviceEntry.getValue()).get("uuid"));
+            String serviceUuid = (String)((Map<String, Object>)serviceEntry.getValue()).get("uuid");
+            //Log.d(logTag, "service contains characteristics: " + ((Map<String, Object>)serviceEntry.getValue()).get("characteristics"));
+            List<Map<String, Object>> characteristics = (List<Map<String, Object>>)((Map<String, Object>)serviceEntry.getValue()).get("characteristics");
+            for (Map<String, Object> c : characteristics) {
+                Log.d(logTag, "Characteristic: " + c);
+                if ((boolean)c.get("notifications")) {
+                    Log.d(logTag, "About to subcribe to characteristics notificatons");
+                    // TODO: Queue up the write descriptor requests for notifications
+                    subscribeToNotification(serviceUuid, (String)c.get("uuid"));
+                }
+            }
+            //Log.d(logTag, ((Map<String, Object>)serviceEntry).getValue());
+            /*for (Map<String, Object> characteristic : serviceEntry.getValue("characteristics")) {
+                Log.d(logTag, "Characteristic found: " + characteristic);
+            }*/
         }
     }
 }
