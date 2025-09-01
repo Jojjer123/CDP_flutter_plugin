@@ -2,6 +2,7 @@ package com.jojjer.companiondevicepairing;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.sql.Time;
 import java.io.FileInputStream;
 import java.io.ByteArrayOutputStream;
@@ -32,18 +33,6 @@ import android.bluetooth.BluetoothGattCharacteristic;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 
-class WriteRequest {
-    BluetoothGattCharacteristic characteristic;
-    byte[] data;
-    int writeType;
-
-    WriteRequest(BluetoothGattCharacteristic characteristic, byte[] data, int writeType) {
-        this.characteristic = characteristic;
-        this.data = data;
-        this.writeType = writeType;
-    }
-}
-
 public final class BleManager {
     private static final String noConnectionStr = "No connection to device!";
     private static final String logTag = "BleManager";
@@ -57,19 +46,10 @@ public final class BleManager {
     private String sensorData;
 
     private List<String> foundServiceUUIDs = new ArrayList<String>();
-
-    Queue<WriteRequest> writeQueue = new LinkedList<>();
-    boolean isWriting = false;
-    boolean isReading = false;
-
-    private final Object writeLock = new Object();
-    private final Object readLock = new Object();
-    private volatile boolean writeCompleted = false;
-    private volatile boolean readCompleted = false;
-
     private Map<String, Object> deviceModel;
 
-    Queue<BluetoothGattDescriptor> descriptorWriteQueue = new LinkedList();
+    private Queue<Runnable> gattOperationQueue = new LinkedList();
+    private boolean gattOperationInProgress = false;
 
     private BleManager() {}
 
@@ -92,6 +72,24 @@ public final class BleManager {
     public void registerBleCallbacks(BleCallback cb) {
         this.bleCallback = cb;
     }
+
+    private void enqueueGattOperation(Runnable op) {
+        gattOperationQueue.add(op);
+        if (!gattOperationInProgress) {
+            nextGattOperation();
+        }
+    }
+
+    private void nextGattOperation() {
+        if (gattOperationQueue.isEmpty()) {
+            gattOperationInProgress = false;
+            return;
+        }
+
+        gattOperationInProgress = true;
+        gattOperationQueue.poll().run();
+    }
+
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override
@@ -122,15 +120,32 @@ public final class BleManager {
                     }
                 }
             }
+            Log.d(logTag, "About to check for notification subscriptions");
             subscribeToNotifications();
+
+            checkTimeSyncRequested();
         }
 
         @Override
         public void onCharacteristicChanged(BluetoothGatt gatt,
                                             BluetoothGattCharacteristic characteristic,
                                             byte[] value) {
+            Log.d(logTag, "--------------------Characteristic changed-------------------");
             Log.d(logTag, "Sensor data received");
-            bleCallback.characteristicChangedCallback(characteristic.getService().getUuid().toString(), characteristic.getUuid().toString(), value);
+            if (bleCallback != null) {
+                bleCallback.characteristicChangedCallback(characteristic.getService().getUuid().toString(), characteristic.getUuid().toString(), value);
+            }
+            else {
+                Log.d(logTag, "BleCallback is null, cannot send data to frontend");
+                Log.d(logTag, "Characteristic that changed: " + characteristic.getUuid().toString());
+                if (!deviceModel.isEmpty()) {
+                    Log.d(logTag, "checking for available characteristic and possible response");
+                    respondToChangedCharacteristic(characteristic.getService().getUuid().toString(),
+                                                   characteristic.getUuid().toString(),
+                                                   value);
+                }
+            }
+            Log.d(logTag, "------------------Characteristic changed done----------------");
         }
 
         @Override
@@ -138,13 +153,10 @@ public final class BleManager {
                                          BluetoothGattCharacteristic characteristic,
                                          byte[] value,
                                          int status) {
+            Log.d(logTag, "---------------------Characteristic read---------------------");
             Log.d(logTag, "Characteristic read: " + characteristic.getUuid()/*characteristic.toString()*/);
             Log.d(logTag, Arrays.toString(value));
-            synchronized (readLock) {
-                readCompleted = true;
-                isReading = false;
-                readLock.notify();
-            }
+
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 if (value.length == 0) {
                     Log.d(logTag, "Read characteristic with no value");
@@ -152,41 +164,50 @@ public final class BleManager {
                 }
                 int data = bytesToInt(value);
                 Log.d(logTag, "Data: " + data);
+                if (!deviceModel.isEmpty()) {
+                    Log.d(logTag, "checking for available characteristic and possible response");
+                    respondToChangedCharacteristic(characteristic.getService().getUuid().toString(),
+                                                   characteristic.getUuid().toString(),
+                                                   value);
+                }
                 if (bleCallback != null) {
                     bleCallback.readCharacteristicCallback(characteristic.getService().getUuid().toString(), characteristic.getUuid().toString(), data);
                 }
                 else {
-                    Log.d(logTag, "BleCallback is null, cannot send data");
+                    Log.d(logTag, "BleCallback is null, cannot send data to frontend");
                 }
             } else {
                 Log.d(logTag, "Failed to read characteristic");
             }
+
+            gattOperationInProgress = false;
+            nextGattOperation();
+
+            Log.d(logTag, "-------------------Characteristic read done------------------");
         }
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt gatt,
                                           BluetoothGattCharacteristic characteristic,
                                           int status) {
-            synchronized (writeLock) {
-                writeCompleted = true;
-                writeLock.notify();
-            }
-
+            Log.d(logTag, "---------------------Characteristic write--------------------");
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(logTag, "Write failed to: " + characteristic.getUuid() + ", status: " + status);
             }
-            isWriting = false;
-            processNextWrite();
+
+            gattOperationInProgress = false;
+            nextGattOperation();
+            Log.d(logTag, "-------------------Characteristic write done-----------------");
         }
 
         @Override
         public void onDescriptorWrite(BluetoothGatt gatt,
                                       BluetoothGattDescriptor descriptor,
                                       int status) {
-            descriptorWriteQueue.remove();
-            if (!descriptorWriteQueue.isEmpty()) {
-                gatt.writeDescriptor(descriptor);
-            }
+            Log.d(logTag, "-----------------------Descriptor write----------------------");
+            gattOperationInProgress = false;
+            nextGattOperation();
+            Log.d(logTag, "--------------------Descriptor write done--------------------");
         }
     };
 
@@ -290,83 +311,34 @@ public final class BleManager {
     }
 
     public void subscribeToNotification(String serviceUuid, String characteristicUuid) {
-            serviceUuid = UuidUtils.normalizeUuid(serviceUuid);
-            if (foundServiceUUIDs.contains(serviceUuid)) {
-                if (gatt == null) {
-                    Log.d(logTag, "Gatt is null, cannot subscribe to notifications");
+        Log.d(logTag, "-----------------Subscribing to notification-----------------");
+        serviceUuid = UuidUtils.normalizeUuid(serviceUuid);
+        if (foundServiceUUIDs.contains(serviceUuid)) {
+            if (gatt == null) {
+                Log.d(logTag, "Gatt is null, cannot subscribe to notifications");
+                return;
+            }
+            BluetoothGattService service = gatt.getService(UUID.fromString(serviceUuid));
+            if (service != null) {
+                BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(characteristicUuid));
+                if (characteristic == null) {
+                    Log.d(logTag, "Characteristic not found: " + characteristicUuid);
                     return;
                 }
-                BluetoothGattService service = gatt.getService(UUID.fromString(serviceUuid));
-                if (service != null) {
-                    BluetoothGattCharacteristic characteristic = service.getCharacteristic(UUID.fromString(characteristicUuid));
-                    if (characteristic == null) {
-                        Log.d(logTag, "Characteristic not found: " + characteristicUuid);
-                        return;
-                    }
-                    BluetoothGattDescriptor descriptor = characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"));
-                    descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                    descriptorWriteQueue.add(descriptor);
 
-                    if (descriptorWriteQueue.size() == 1) {
-                        gatt.writeDescriptor(descriptor);
-                    }
-                    gatt.setCharacteristicNotification(characteristic, true);
-                } else {
-                    Log.d(logTag, "Service not found: " + serviceUuid);
-                }
+                BluetoothGattDescriptor descriptor = characteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"));
+                descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+
+                enqueueGattOperation(() -> gatt.writeDescriptor(descriptor));
+
+                gatt.setCharacteristicNotification(characteristic, true);
             } else {
-                Log.d(logTag, "UUID not found in discovered services: " + serviceUuid);
-        }
-    }
-
-    private void processNextWrite() {
-        Log.d(logTag, "Processing write");
-        if (writeQueue.isEmpty()) {
-            Log.d(logTag, "Write queue is empty");
-            isWriting = false;
-            return;
-        }
-
-        isWriting = true;
-        WriteRequest request = writeQueue.poll();
-        int success = gatt.writeCharacteristic(request.characteristic, request.data, request.writeType);
-
-        if (success != 0) {
-            Log.e(logTag, "Failed to write to characteristic: " + request.characteristic.getUuid());
-            isWriting = false;
-            processNextWrite();
-        }
-        else {
-            Log.d(logTag, "Successfully wrote to characteristic: " + request.characteristic.getUuid());
-        }
-    }
-
-    private void waitForWriteComplete() {
-        synchronized (writeLock) {
-            while (!writeCompleted) {
-                try {
-                    writeLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    Log.e(logTag, "Write wait interrupted: " + e.getMessage());
-                }
+                Log.d(logTag, "Service not found: " + serviceUuid);
             }
-            writeCompleted = false;
+        } else {
+            Log.d(logTag, "UUID not found in discovered services: " + serviceUuid);
         }
-    }
-
-    private void waitForReadComplete() {
-        synchronized (readLock) {
-            while (!readCompleted) {
-                try {
-                    readLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    Log.e(logTag, "Read wait interrupted: " + e.getMessage());
-                }
-            }
-            readCompleted = false;
-        }
+        Log.d(logTag, "-------------------------------------------------------------");
     }
 
     private byte[] loadFirmwareFile(File firmwareFile) {
@@ -409,29 +381,18 @@ public final class BleManager {
         otaStartCommand[3] = (byte) ((fileSize >> 8) & 0xFF);
         otaStartCommand[4] = (byte) (fileSize & 0xFF);
 
-        gatt.writeCharacteristic(otaCharacteristic, otaStartCommand, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-
-        try {
-            waitForWriteComplete();
-        } catch (Exception e) {
-            Log.e(logTag, "Error waiting for write complete: " + e.getMessage());
-            return;
-        }
+        enqueueGattOperation(() -> gatt.writeCharacteristic(otaCharacteristic, otaStartCommand, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT));
 
         int offset = 0;
         int packetIndex = 0;
 
+        // TODO: Rewrite the code for callbacks of percentage of packages transferred
+
         while (offset < firmwareData.length) {
             int chunkSize = Math.min(400, firmwareData.length - offset);
             byte[] chunk = Arrays.copyOfRange(firmwareData, offset, offset + chunkSize);
-            int success = gatt.writeCharacteristic(otaCharacteristic, chunk, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-            if (success != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(logTag, "Failed to write chunk, error code: " + success);
-                return;
-            }
+            enqueueGattOperation(() -> gatt.writeCharacteristic(otaCharacteristic, chunk, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT));
 
-            // Wait for write to complete before sending next chunk
-            waitForWriteComplete();
             offset += chunkSize;
             packetIndex++;
 
@@ -451,6 +412,7 @@ public final class BleManager {
     }
 
     public boolean sendCommand(byte[] value, String serviceUuid, String characteristicUuid) {
+        Log.d(logTag, "-----------------------Sending command-----------------------");
         if (!isBluetoothOn()) {
             Log.d(logTag, noConnectionStr);
             return false;
@@ -461,6 +423,9 @@ public final class BleManager {
                 Log.d(logTag, "Gatt is null, cannot send command");
                 return false;
             }
+
+            gatt.requestMtu(400);
+
             BluetoothGattService service = gatt.getService(UUID.fromString(serviceUuid));
             if (service != null) {
                 Log.d(logTag, "Service found");
@@ -470,10 +435,7 @@ public final class BleManager {
                     return false;
                 }
                 Log.d(logTag, "Characteristic found");
-                writeQueue.add(new WriteRequest(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT));
-                if (!isWriting) {
-                    processNextWrite();
-                }
+                enqueueGattOperation(() -> gatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT));
             } else {
                 Log.d(logTag, "Service not found: " + serviceUuid);
                 return false;
@@ -483,6 +445,7 @@ public final class BleManager {
             return false;
         }
 
+        Log.d(logTag, "-------------------------------------------------------------");
         return true;
     }
 
@@ -510,17 +473,9 @@ public final class BleManager {
                 return false;
             }
 
-            if (isReading) {
-                try {
-                    waitForReadComplete();
-                } catch (Exception e) {
-                    Log.e(logTag, "Error waiting for read complete: " + e.getMessage());
-                    return false;
-                }
-            }
-            isReading = true;
+            enqueueGattOperation(() -> gatt.readCharacteristic(characteristic));
 
-            return gatt.readCharacteristic(characteristic);
+            return true;
         }
         else {
             Log.d(logTag, noConnectionStr);
@@ -542,26 +497,140 @@ public final class BleManager {
     }
 
     public void subscribeToNotifications() {
-        // Log.d(logTag, "Models serviceMap: " + deviceModel.get("serviceMap"));
+        Log.d(logTag, "Checking for characteristics that require subscribing to notifications");
+        if (!modelKnown()) return;
+
         for (Map.Entry<String, Object> serviceEntry : ((Map<String, Object>)deviceModel.get("serviceMap")).entrySet()) {
-            //Log.d(logTag, "found service: " + serviceEntry);
-            //Log.d(logTag, "service contains values: " + serviceEntry.getValue());
-            //Log.d(logTag, "service uuid: " + ((Map<String, Object>)serviceEntry.getValue()).get("uuid"));
             String serviceUuid = (String)((Map<String, Object>)serviceEntry.getValue()).get("uuid");
-            //Log.d(logTag, "service contains characteristics: " + ((Map<String, Object>)serviceEntry.getValue()).get("characteristics"));
             List<Map<String, Object>> characteristics = (List<Map<String, Object>>)((Map<String, Object>)serviceEntry.getValue()).get("characteristics");
             for (Map<String, Object> c : characteristics) {
-                Log.d(logTag, "Characteristic: " + c);
-                if ((boolean)c.get("notifications")) {
-                    Log.d(logTag, "About to subcribe to characteristics notificatons");
-                    // TODO: Queue up the write descriptor requests for notifications
+                Object notificationsEnabled = c.get("notifications");
+                if (notificationsEnabled == null) continue;
+
+                if ((boolean)notificationsEnabled) {
                     subscribeToNotification(serviceUuid, (String)c.get("uuid"));
                 }
             }
-            //Log.d(logTag, ((Map<String, Object>)serviceEntry).getValue());
-            /*for (Map<String, Object> characteristic : serviceEntry.getValue("characteristics")) {
-                Log.d(logTag, "Characteristic found: " + characteristic);
-            }*/
         }
+    }
+
+    public void checkTimeSyncRequested() {
+        Log.d(logTag, "Checking if time sync has been requested");
+        if (!modelKnown()) return;
+
+        for (Map.Entry<String, Object> serviceEntry : ((Map<String, Object>)deviceModel.get("serviceMap")).entrySet()) {
+            String serviceUuid = (String)((Map<String, Object>)serviceEntry.getValue()).get("uuid");
+            List<Map<String, Object>> characteristics = (List<Map<String, Object>>)((Map<String, Object>)serviceEntry.getValue()).get("characteristics");
+            for (Map<String, Object> c : characteristics) {
+                Object timeSync = c.get("timeSync");
+                if (timeSync == null) continue;
+                Log.d(logTag, "Found timeSync attriute");
+
+                if ((boolean)timeSync) {
+                    Log.d(logTag, "Requesting read of characteristic");
+
+                    if(!readCharacteristic(serviceUuid, c.get("uuid").toString())) {
+                        Log.e(logTag, "Failed reading characteristic: " + c.get("uuid").toString());
+                    }
+                }
+            }
+        }
+    }
+
+    public void respondToChangedCharacteristic(String service, String characteristic, byte[] value) {
+        for (Map.Entry<String, Object> serviceEntry : ((Map<String, Object>)deviceModel.get("serviceMap")).entrySet()) {
+            String serviceUuid = (String)((Map<String, Object>)serviceEntry.getValue()).get("uuid");
+            if (service.equals(serviceUuid)) {
+                // String serviceKey = serviceEntry.getKey().toString();
+                List<Map<String, Object>> characteristics = (List<Map<String, Object>>)((Map<String, Object>)serviceEntry.getValue()).get("characteristics");
+                for (Map<String, Object> c : characteristics) {
+                    String characteristicUuid = c.get("uuid").toString();
+                    if (characteristic.equals(characteristicUuid)) {
+                        // TODO: Implement predefined responses/response templates to be registered from flutter app and used here
+                        switch (value[0]) {
+                            case 0x1:
+                                Log.d(logTag, "Time sync requested");
+                                syncTime(service, characteristic);
+                                break;
+                            case 0x2:
+                                Log.d(logTag, "Notification");
+                                break;
+                            default:
+                                Log.d(logTag, "Header id: " + value[0] + ", not implemented");
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public void sendNotificationToWatch(Long ts, String pkg, String title, String text) {
+        Log.d(logTag, "About to forward notification to watch");
+        byte[] notificationPayload = new byte[300];
+
+        String tsAsString = ts.toString();
+
+        byte[] tsBytes = tsAsString.getBytes(StandardCharsets.UTF_8);
+        byte[] pkgBytes = pkg.getBytes(StandardCharsets.UTF_8);
+        byte[] titleBytes = title.getBytes(StandardCharsets.UTF_8);
+        byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
+
+        int tsLen = tsBytes.length;
+        int pkgLen = Math.min(pkgBytes.length, 50);
+        int titleLen = Math.min(titleBytes.length, 50);
+
+        int remainingPayloadMax = 300 - 4 - tsLen - pkgLen - titleLen;
+        int textLen = Math.min(textBytes.length, remainingPayloadMax);
+
+        notificationPayload[0] = 3;
+        notificationPayload[1] = (byte) tsLen;
+        notificationPayload[2] = (byte) pkgLen;
+        notificationPayload[3] = (byte) titleLen;
+        notificationPayload[4] = (byte) textLen;
+
+        int offset = 5;
+        System.arraycopy(tsBytes, 0, notificationPayload, offset, tsLen);
+        offset += tsLen;
+
+        System.arraycopy(pkgBytes, 0, notificationPayload, offset, pkgLen);
+        offset += pkgLen;
+
+        System.arraycopy(titleBytes, 0, notificationPayload, offset, titleLen);
+        offset += titleLen;
+
+        System.arraycopy(textBytes, 0, notificationPayload, offset, textLen);
+
+        // TODO: Replace the service and characteristic UUIDs with dynamic check for notification specific from device model
+        sendCommand(notificationPayload,
+                    "12342000-14e1-41b1-b3b6-6bb8b548ee82",
+                    "12342001-14e1-41b1-b3b6-6bb8b548ee82");
+    }
+
+    private void syncTime(String service, String characteristic) {
+        long currentTime = Math.ceilDiv(System.currentTimeMillis(), 1000);
+        byte[] timeBytes = new byte[9];
+        timeBytes[0] = 2;
+        for (int i = 8; i >= 1; --i) {
+          timeBytes[i] = (byte) (currentTime & 0xFF);
+          currentTime >>= 8;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        for (byte b : timeBytes) {
+          sb.append(b & 0xFF)
+            .append(", ");
+        }
+        sendCommand(timeBytes, service, characteristic);
+    }
+
+    private boolean modelKnown() {
+        Object modelName = deviceModel.get("modelName");
+        if (modelName == null) {
+            Log.d(logTag, "No model found");
+            return false;
+        }
+
+        return !modelName.equals("Unknown");
     }
 }

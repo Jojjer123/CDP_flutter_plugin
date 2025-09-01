@@ -53,6 +53,7 @@ public class CDPService extends CompanionDeviceService {
         Log.d(CompanionDevicePairing.CDP_TAG, "CDPService created");
         bleManager = BleManager.getInstance();
         bleManager.initialize(getApplicationContext());
+        NotificationForwarder.getInstance().setBleManager(bleManager);
     }
 
     @Override
@@ -76,7 +77,6 @@ public class CDPService extends CompanionDeviceService {
             }
 
             bleManager.loadDeviceModelFromStorage();
-            //bleManager.subscribeToNotifications();
         }
         else {
             Log.d(CompanionDevicePairing.CDP_TAG, "No assoicated device found");
